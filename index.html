@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>เกม AR จำแนกรูปสี่เหลี่ยม (AR Quadrilaterals Game)</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<!-- MediaPipe Hands Libraries -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+<link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+body {
+font-family: 'Prompt', sans-serif;
+margin: 0;
+overflow: hidden;
+background-color: #f0fdf4;
+user-select: none;
+}
+
+/* Mirror the video so it acts like a mirror */
+#webcam {
+position: absolute;
+top: 0;
+left: 0;
+width: 100vw;
+height: 100vh;
+object-fit: cover;
+transform: scaleX(-1);
+z-index: -1;
+}
+
+/* Hand cursor styles */
+#cursor {
+position: absolute;
+width: 60px;
+height: 60px;
+background-color: rgba(255, 255, 255, 0.4);
+border: 4px solid #3b82f6; /* Blue ring */
+border-radius: 50%;
+pointer-events: none;
+transform: translate(-50%, -50%);
+z-index: 50;
+display: none;
+box-shadow: 0 0 15px rgba(59, 130, 246, 0.8);
+transition: transform 0.05s ease-out;
+display: flex;
+justify-content: center;
+align-items: center;
+font-size: 30px;
+}
+
+/* Answer Button Progress Bar */
+.answer-btn {
+position: relative;
+overflow: hidden;
+transition: transform 0.2s;
+}
+
+.answer-btn.hovering {
+transform: scale(1.05);
+box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+}
+
+.progress-bar {
+position: absolute;
+top: 0;
+left: 0;
+height: 100%;
+width: 0%;
+background-color: rgba(34, 197, 94, 0.4); /* Green transparent */
+z-index: 0;
+transition: width 0.1s linear;
+}
+
+.answer-text {
+position: relative;
+z-index: 10;
+}
+
+/* Animations */
+@keyframes pop {
+0% { transform: scale(0.5); opacity: 0; }
+80% { transform: scale(1.1); opacity: 1; }
+100% { transform: scale(1); opacity: 1; }
+}
+
+.animate-pop {
+animation: pop 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+}
+
+.glass-panel {
+background: rgba(255, 255, 255, 0.85);
+backdrop-filter: blur(10px);
+border: 2px solid rgba(255, 255, 255, 0.5);
+box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+}
+
+#feedback-overlay {
+position: absolute;
+inset: 0;
+display: none;
+justify-content: center;
+align-items: center;
+z-index: 100;
+font-size: 8rem;
+font-weight: 800;
+text-shadow: 0 4px 20px rgba(0,0,0,0.3);
+}
+</style>
+</head>
+<body>
+
+<!-- Webcam Feed -->
+<video id="webcam" autoplay playsinline></video>
+
+<!-- Interactive Cursor mapped to Hand -->
+<div id="cursor">👆</div>
+
+<!-- Feedback Overlay (Correct/Wrong) -->
+<div id="feedback-overlay"></div>
+
+<!-- UI Overlay container -->
+<div id="game-ui" class="absolute inset-0 flex flex-col justify-between p-6 pointer-events-none hidden">
+
+<!-- Header / Score -->
+<div class="flex justify-between items-start">
+<div class="glass-panel px-6 py-3 rounded-2xl animate-pop">
+<h1 class="text-2xl font-bold text-blue-800">🕵️‍♀️ นักสืบสี่เหลี่ยม</h1>
+<p class="text-sm text-gray-600">ใช้มือบังคับเป้าเพื่อตอบคำถาม</p>
+</div>
+<div class="glass-panel px-6 py-3 rounded-2xl text-center animate-pop">
+<p class="text-sm font-semibold text-gray-500 uppercase">คะแนน</p>
+<p id="score-display" class="text-3xl font-extrabold text-green-600">0</p>
+</div>
+</div>
+
+<!-- Question Area -->
+<div class="flex justify-center w-full">
+<div class="glass-panel px-8 py-6 rounded-3xl max-w-3xl w-full text-center border-b-4 border-blue-500 animate-pop">
+<h2 id="question-text" class="text-3xl md:text-4xl font-bold text-gray-800 leading-tight">
+กำลังโหลดคำถาม...
+</h2>
+<p id="question-counter" class="mt-3 text-lg text-blue-600 font-semibold">ข้อที่ 1 / 6</p>
+</div>
+</div>
+
+<!-- Answers Area -->
+<div id="answers-container" class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8 w-full max-w-4xl mx-auto pointer-events-auto">
+<!-- Buttons dynamically generated here -->
+</div>
+
+</div>
+
+<!-- Start / Loading Screen -->
+<div id="start-screen" class="absolute inset-0 bg-gradient-to-br from-blue-400 to-purple-500 flex flex-col justify-center items-center z-50 text-white p-6 text-center">
+<h1 class="text-5xl font-extrabold mb-4 text-yellow-300 drop-shadow-md">🎮 เกม AR จำแนกรูปสี่เหลี่ยม</h1>
+<p class="text-2xl mb-8 font-semibold">เรียนรู้สมบัติของรูปสี่เหลี่ยมด้วยฝ่ามือของคุณ!</p>
+
+<div class="bg-white/20 p-6 rounded-2xl backdrop-blur-sm max-w-2xl text-left mb-8 shadow-lg">
+<h3 class="text-xl font-bold mb-3 text-yellow-200">วิธีเล่น:</h3>
+<ul class="list-disc list-inside text-lg space-y-2">
+<li>เปิดกล้องและถอยห่างจากหน้าจอเล็กน้อย</li>
+<li>ชูมือขึ้นมาเพื่อควบคุม <span class="bg-blue-500 rounded-full px-2 py-1">เป้าสีฟ้า 👆</span></li>
+<li>เลื่อนมือไปทับคำตอบที่ถูกต้อง ค้างไว้ 2 วินาทีเพื่อเลือก</li>
+</ul>
+</div>
+
+<button id="start-btn" class="bg-yellow-400 hover:bg-yellow-300 text-gray-900 font-bold py-4 px-10 rounded-full text-2xl shadow-xl transform transition hover:scale-105" disabled>
+⏳ กำลังโหลดระบบ AI...
+</button>
+<p id="loading-text" class="mt-4 text-sm text-gray-200">กำลังดาวน์โหลดโมเดลตรวจจับมือ (อาจใช้เวลาสักครู่)</p>
+</div>
+
+<!-- End Game Screen -->
+<div id="end-screen" class="absolute inset-0 bg-green-500 flex flex-col justify-center items-center z-50 text-white p-6 text-center hidden">
+<h1 class="text-6xl font-extrabold mb-4 drop-shadow-md">🎉 จบเกม!</h1>
+<p class="text-3xl mb-8">คุณทำคะแนนได้</p>
+<div class="bg-white text-green-600 text-8xl font-black px-12 py-8 rounded-3xl shadow-2xl mb-8">
+<span id="final-score">0</span> / 6
+</div>
+<button onclick="location.reload()" class="bg-yellow-400 hover:bg-yellow-300 text-gray-900 font-bold py-4 px-10 rounded-full text-2xl shadow-xl transform transition hover:scale-105">
+เล่นอีกครั้ง 🔄
+</button>
+</div>
+
+<script>
+// --- Game Data ---
+const questions = [
+{
+q: "รูปสี่เหลี่ยมใดมีมุมทุกมุมเป็นมุมฉาก และด้านทุกด้านยาวเท่ากัน?",
+options: ["สี่เหลี่ยมจัตุรัส", "สี่เหลี่ยมผืนผ้า", "สี่เหลี่ยมขนมเปียกปูน"],
+answer: 0
+},
+{
+q: "รูปสี่เหลี่ยมใดมีด้านตรงข้ามขนานกัน 2 คู่ มุมเป็นมุมฉาก แต่ด้านที่ติดกันยาวไม่เท่ากัน?",
+options: ["สี่เหลี่ยมขนมเปียกปูน", "สี่เหลี่ยมรูปว่าว", "สี่เหลี่ยมผืนผ้า"],
+answer: 2
+},
+{
+q: "รูปสี่เหลี่ยมใดมีด้านยาวเท่ากันทุกด้าน แต่มุมทุกมุมไม่เป็นมุมฉาก?",
+options: ["สี่เหลี่ยมคางหมู", "สี่เหลี่ยมขนมเปียกปูน", "สี่เหลี่ยมด้านขนาน"],
+answer: 1
+},
+{
+q: "รูปสี่เหลี่ยมใดมีด้านขนานและยาวเท่ากัน 2 คู่ แต่มุมไม่เป็นมุมฉาก?",
+options: ["สี่เหลี่ยมด้านขนาน", "สี่เหลี่ยมผืนผ้า", "สี่เหลี่ยมรูปว่าว"],
+answer: 0
+},
+{
+q: "รูปสี่เหลี่ยมใดมีด้านขนานกันเพียง 1 คู่เท่านั้น?",
+options: ["สี่เหลี่ยมจัตุรัส", "สี่เหลี่ยมด้านขนาน", "สี่เหลี่ยมคางหมู"],
+answer: 2
+},
+{
+q: "รูปสี่เหลี่ยมใดมีด้านประชิดยาวเท่ากัน 2 คู่ และมุมตรงข้ามมีขนาดเท่ากัน 1 คู่?",
+options: ["สี่เหลี่ยมรูปว่าว", "สี่เหลี่ยมคางหมู", "สี่เหลี่ยมขนมเปียกปูน"],
+answer: 0
+}
+];
+
+// --- Game State ---
+let currentQuestionIdx = 0;
+let score = 0;
+let isGameActive = false;
+
+// Hover Selection State
+const HOVER_TIME_REQUIRED = 1500; // 1.5 seconds to select
+let hoveredButtonIdx = -1;
+let hoverStartTime = 0;
+let answerLocked = false; // Prevent multiple triggers
+
+// --- DOM Elements ---
+const videoElement = document.getElementById('webcam');
+const cursorElement = document.getElementById('cursor');
+const startScreen = document.getElementById('start-screen');
+const startBtn = document.getElementById('start-btn');
+const loadingText = document.getElementById('loading-text');
+const gameUi = document.getElementById('game-ui');
+const endScreen = document.getElementById('end-screen');
+
+const questionText = document.getElementById('question-text');
+const questionCounter = document.getElementById('question-counter');
+const answersContainer = document.getElementById('answers-container');
+const scoreDisplay = document.getElementById('score-display');
+const feedbackOverlay = document.getElementById('feedback-overlay');
+
+// Target coordinates mapped from MediaPipe
+let targetX = -100;
+let targetY = -100;
+
+// --- Initialize MediaPipe Hands ---
+const hands = new Hands({
+locateFile: (file) => {
+return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+}
+});
+
+hands.setOptions({
+maxNumHands: 1, // Track only 1 hand to keep it simple
+modelComplexity: 1,
+minDetectionConfidence: 0.7,
+minTrackingConfidence: 0.7
+});
+
+hands.onResults(onResults);
+
+// Setup Camera
+const camera = new Camera(videoElement, {
+onFrame: async () => {
+await hands.send({image: videoElement});
+},
+width: 640,
+height: 480
+});
+
+// Initialize camera when script loads to start model loading
+camera.start().then(() => {
+// Camera started and model loaded
+startBtn.innerHTML = "▶️ เริ่มเกมเลย!";
+startBtn.disabled = false;
+startBtn.classList.remove('bg-yellow-400');
+startBtn.classList.add('bg-green-500', 'text-white', 'hover:bg-green-400');
+loadingText.style.display = 'none';
+}).catch(err => {
+console.error("Camera error:", err);
+loadingText.innerHTML = "❌ ไม่สามารถเข้าถึงกล้องได้ กรุณาอนุญาตการใช้งานกล้องและรีเฟรชหน้าจอ";
+loadingText.classList.add('text-red-300', 'font-bold', 'text-lg');
+});
+
+startBtn.addEventListener('click', () => {
+startScreen.classList.add('hidden');
+gameUi.classList.remove('hidden');
+cursorElement.style.display = 'flex';
+isGameActive = true;
+loadQuestion();
+gameLoop(); // Start visual game loop for collision detection
+});
+
+// --- Hand Tracking Results ---
+function onResults(results) {
+if (!isGameActive) return;
+
+if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+const landmarks = results.multiHandLandmarks[0];
+
+// Use index finger tip (landmark 8) for pointing
+const indexFinger = landmarks[8];
+
+// Mirror the X coordinate because the video is mirrored via CSS
+const x = 1 - indexFinger.x;
+const y = indexFinger.y;
+
+// Map normalized coordinates to screen pixel coordinates
+targetX = x * window.innerWidth;
+targetY = y * window.innerHeight;
+} else {
+// Hand lost
+targetX = -100;
+targetY = -100;
+}
+}
+
+// --- Game Logic ---
+function loadQuestion() {
+answerLocked = false;
+hoveredButtonIdx = -1;
+
+const qData = questions[currentQuestionIdx];
+questionText.innerText = qData.q;
+questionCounter.innerText = `ข้อที่ ${currentQuestionIdx + 1} / ${questions.length}`;
+
+// Generate answer buttons
+answersContainer.innerHTML = '';
+qData.options.forEach((opt, idx) => {
+const btn = document.createElement('div');
+btn.className = 'answer-btn glass-panel text-2xl font-bold py-6 px-4 rounded-full text-gray-800 cursor-pointer text-center relative border-4 border-transparent shadow-lg';
+btn.setAttribute('data-idx', idx);
+
+btn.innerHTML = `
+<div class="progress-bar" id="progress-${idx}"></div>
+<span class="answer-text">${opt}</span>
+`;
+answersContainer.appendChild(btn);
+});
+}
+
+function handleAnswer(selectedIdx) {
+if (answerLocked) return;
+answerLocked = true;
+
+const qData = questions[currentQuestionIdx];
+const isCorrect = (selectedIdx === qData.answer);
+const buttons = document.querySelectorAll('.answer-btn');
+
+// Visual feedback on buttons
+buttons.forEach((btn, idx) => {
+if (idx === qData.answer) {
+btn.classList.add('bg-green-300', 'border-green-500');
+btn.querySelector('.progress-bar').style.backgroundColor = 'transparent';
+} else if (idx === selectedIdx && !isCorrect) {
+btn.classList.add('bg-red-300', 'border-red-500');
+btn.querySelector('.progress-bar').style.backgroundColor = 'transparent';
+}
+});
+
+// Big Screen Feedback
+feedbackOverlay.style.display = 'flex';
+if (isCorrect) {
+score++;
+scoreDisplay.innerText = score;
+feedbackOverlay.innerHTML = "<span class='text-green-400 drop-shadow-lg animate-pop'>✅ ถูกต้อง!</span>";
+feedbackOverlay.style.background = "rgba(74, 222, 128, 0.2)";
+} else {
+feedbackOverlay.innerHTML = "<span class='text-red-500 drop-shadow-lg animate-pop'>❌ ผิดครับ/ค่ะ</span>";
+feedbackOverlay.style.background = "rgba(248, 113, 113, 0.2)";
+}
+
+// Wait 2.5 seconds, then next question
+setTimeout(() => {
+feedbackOverlay.style.display = 'none';
+currentQuestionIdx++;
+
+if (currentQuestionIdx < questions.length) {
+loadQuestion();
+} else {
+endGame();
+}
+}, 2500);
+}
+
+function endGame() {
+isGameActive = false;
+gameUi.classList.add('hidden');
+cursorElement.style.display = 'none';
+endScreen.classList.remove('hidden');
+document.getElementById('final-score').innerText = score;
+}
+
+// --- Main Visual & Collision Loop ---
+function gameLoop() {
+if (!isGameActive) return;
+
+// Update cursor position visually (smooth follow could be added, but direct mapping is fine for AR)
+cursorElement.style.left = `${targetX}px`;
+cursorElement.style.top = `${targetY}px`;
+
+if (!answerLocked) {
+checkCollisions();
+}
+
+requestAnimationFrame(gameLoop);
+}
+
+function checkCollisions() {
+const buttons = document.querySelectorAll('.answer-btn');
+let currentlyHoveredIdx = -1;
+
+buttons.forEach((btn) => {
+const rect = btn.getBoundingClientRect();
+// Simple point-in-rectangle collision check
+if (targetX >= rect.left && targetX <= rect.right &&
+targetY >= rect.top && targetY <= rect.bottom) {
+currentlyHoveredIdx = parseInt(btn.getAttribute('data-idx'));
+}
+});
+
+const now = Date.now();
+
+if (currentlyHoveredIdx !== -1) {
+// Hand is over a button
+if (hoveredButtonIdx !== currentlyHoveredIdx) {
+// Just entered a new button
+hoveredButtonIdx = currentlyHoveredIdx;
+hoverStartTime = now;
+resetAllProgress();
+} else {
+// Continue hovering
+const hoverDuration = now - hoverStartTime;
+const progressPercentage = Math.min((hoverDuration / HOVER_TIME_REQUIRED) * 100, 100);
+
+const progressBar = document.getElementById(`progress-${hoveredButtonIdx}`);
+if (progressBar) {
+progressBar.style.width = `${progressPercentage}%`;
+}
+
+const activeBtn = buttons[hoveredButtonIdx];
+activeBtn.classList.add('hovering');
+
+// If hover time met
+if (hoverDuration >= HOVER_TIME_REQUIRED) {
+handleAnswer(hoveredButtonIdx);
+}
+}
+} else {
+// Hand is not over any button
+if (hoveredButtonIdx !== -1) {
+hoveredButtonIdx = -1;
+resetAllProgress();
+}
+}
+}
+
+function resetAllProgress() {
+const progressBars = document.querySelectorAll('.progress-bar');
+progressBars.forEach(bar => {
+bar.style.width = '0%';
+});
+const buttons = document.querySelectorAll('.answer-btn');
+buttons.forEach(btn => btn.classList.remove('hovering'));
+}
+
+</script>
+</body>
+</html>
+```eof
